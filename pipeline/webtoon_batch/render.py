@@ -16,7 +16,7 @@ from modules.rendering.render import get_best_render_area, is_vertical_block, py
 from modules.utils.image_utils import get_smart_text_color
 from modules.utils.language_utils import get_language_code, is_no_space_lang
 from modules.utils.textblock import TextBlock
-from modules.utils.translator_utils import format_translations, get_raw_text, get_raw_translation
+from modules.utils.translator_utils import format_translations, get_raw_text, get_raw_translation, is_renderable_translation
 
 if TYPE_CHECKING:
     from .processor import WebtoonBatchProcessor
@@ -39,8 +39,7 @@ class RenderMixin:
 
         render_settings = self.main_page.render_settings()
         target_lang = page_state["target_lang"]
-        target_lang_en = self.main_page.lang_mapping.get(target_lang, target_lang)
-        target_lang_code = get_language_code(target_lang_en)
+        target_lang_code = get_language_code(target_lang)
 
         format_translations(
             blocks, target_lang_code, upper_case=render_settings.upper_case
@@ -56,6 +55,7 @@ class RenderMixin:
         image_path: str,
         blocks: List[TextBlock],
         image_shape: tuple,
+        live_blocks: List[TextBlock] | None = None,
     ) -> None:
         page_state = self.main_page.image_states[image_path]
         viewer_state = page_state.setdefault("viewer_state", {})
@@ -81,8 +81,7 @@ class RenderMixin:
         direction = render_settings.direction
 
         target_lang = page_state["target_lang"]
-        target_lang_en = self.main_page.lang_mapping.get(target_lang, target_lang)
-        target_lang_code = get_language_code(target_lang_en)
+        target_lang_code = get_language_code(target_lang)
 
         virtual_img = SimpleNamespace(shape=image_shape)
         # Avoid clipping seam-owned overflow blocks (needed for page-spanning text).
@@ -98,6 +97,9 @@ class RenderMixin:
         webtoon_manager = getattr(self.main_page.image_viewer, "webtoon_manager", None)
         if self.main_page.webtoon_mode and webtoon_manager:
             should_emit_live = page_index in webtoon_manager.loaded_pages
+        live_block_ids = (
+            None if live_blocks is None else {id(block) for block in live_blocks}
+        )
         page_scene_offset = self._get_page_scene_offset(page_index)
 
         for block in blocks:
@@ -106,7 +108,7 @@ class RenderMixin:
             height = max(1.0, y2 - y1)
 
             translation = block.translation
-            if not translation:
+            if not is_renderable_translation(translation):
                 continue
 
             vertical = is_vertical_block(block, target_lang_code)
@@ -135,7 +137,7 @@ class RenderMixin:
             )
 
             font_color = get_smart_text_color(block.font_color, base_font_color)
-            if should_emit_live:
+            if should_emit_live and (live_block_ids is None or id(block) in live_block_ids):
                 render_block = block.deep_copy()
                 render_block.translation = wrapped_translation
                 render_block.xyxy = list(render_block.xyxy)

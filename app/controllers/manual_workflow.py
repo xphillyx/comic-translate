@@ -11,6 +11,7 @@ from modules.translation.processor import Translator
 from modules.utils.common_utils import is_close
 from modules.utils.device import resolve_device
 from modules.utils.language_utils import get_language_code, is_no_space_lang
+from modules.utils.language_utils import to_canonical_language_name
 from modules.utils.pipeline_config import validate_ocr, validate_translator
 from modules.utils.textblock import sort_blk_list
 from modules.utils.translator_utils import is_there_text, format_translations, set_upper_case
@@ -147,7 +148,10 @@ class ManualWorkflowController:
             self.main.loading.setVisible(True)
             self.main.disable_hbutton_group()
             context = self._prepare_multi_page_context(selected_paths)
-            source_lang_fallback = self.main.s_combo.currentText()
+            source_lang_fallback = to_canonical_language_name(
+                self.main.s_combo.currentText(),
+                self.main.lang_mapping,
+            )
 
             def detect_selected_pages() -> dict[str, list[TextBlock]]:
                 if self.main.pipeline.block_detection.block_detector_cache is None:
@@ -159,12 +163,12 @@ class ManualWorkflowController:
                     if image is None:
                         continue
                     blk_list = detector.detect(image)
-                    if blk_list:
-                        get_best_render_area(blk_list, image)
                     state = self.main.image_states.get(file_path, {})
                     source_lang = state.get("source_lang", source_lang_fallback)
-                    source_lang_en = self.main.lang_mapping.get(source_lang, source_lang)
-                    rtl = source_lang_en == "Japanese"
+                    if blk_list:
+                        get_best_render_area(blk_list, image)
+                    self.main.pipeline.block_detection.annotate_language_if_auto(image, blk_list, source_lang)
+                    rtl = source_lang == "Japanese"
                     results[file_path] = sort_blk_list(blk_list, rtl)
                 return results
 
@@ -238,7 +242,10 @@ class ManualWorkflowController:
             self.main.loading.setVisible(True)
             self.main.disable_hbutton_group()
             context = self._prepare_multi_page_context(selected_paths)
-            source_lang_fallback = self.main.s_combo.currentText()
+            source_lang_fallback = to_canonical_language_name(
+                self.main.s_combo.currentText(),
+                self.main.lang_mapping,
+            )
 
             def ocr_selected_pages() -> dict[str, list[TextBlock]]:
                 cache_manager = self.main.pipeline.cache_manager
@@ -320,7 +327,11 @@ class ManualWorkflowController:
                 return
             for file_path in selected_paths:
                 target_lang = self.main.image_states.get(file_path, {}).get(
-                    "target_lang", self.main.t_combo.currentText()
+                    "target_lang",
+                    to_canonical_language_name(
+                        self.main.t_combo.currentText(),
+                        self.main.lang_mapping,
+                    ),
                 )
                 if not validate_translator(self.main, target_lang):
                     return
@@ -328,8 +339,14 @@ class ManualWorkflowController:
             self.main.loading.setVisible(True)
             self.main.disable_hbutton_group()
             context = self._prepare_multi_page_context(selected_paths)
-            source_lang_fallback = self.main.s_combo.currentText()
-            target_lang_fallback = self.main.t_combo.currentText()
+            source_lang_fallback = to_canonical_language_name(
+                self.main.s_combo.currentText(),
+                self.main.lang_mapping,
+            )
+            target_lang_fallback = to_canonical_language_name(
+                self.main.t_combo.currentText(),
+                self.main.lang_mapping,
+            )
             settings_page = self.main.settings_page
             extra_context = settings_page.get_llm_settings()["extra_context"]
             translator_key = settings_page.get_tool_selection("translator")
@@ -379,6 +396,7 @@ class ManualWorkflowController:
                         )
 
                 if results:
+                    self.main.batch_report_ctrl.resolve_translated_pages(list(results))
                     self.main.mark_project_dirty()
 
             self.main.run_threaded(
@@ -389,7 +407,9 @@ class ManualWorkflowController:
             )
             return
 
-        target_lang = self.main.t_combo.currentText()
+        target_lang = to_canonical_language_name(
+            self.main.t_combo.currentText(), self.main.lang_mapping
+        )
         if not is_there_text(self.main.blk_list) or not validate_translator(
             self.main, target_lang
         ):
@@ -440,6 +460,7 @@ class ManualWorkflowController:
         trg_lng_cd = get_language_code(target_lang_en)
 
         def on_format_finished() -> None:
+            self._resolve_current_page_if_translated()
             for text_item in text_items_to_process:
                 text_item.handleDeselection()
                 x1, y1 = int(text_item.pos().x()), int(text_item.pos().y())
@@ -495,6 +516,16 @@ class ManualWorkflowController:
             self.main.default_error_handler,
             on_format_finished,
         )
+
+    def _resolve_current_page_if_translated(self) -> None:
+        """Remove a fully translated manual page from the batch report."""
+        file_path = self._current_file_path()
+        if not file_path:
+            return
+        blocks = self.main.image_states.get(file_path, {}).get("blk_list", self.main.blk_list)
+        text_blocks = [blk for blk in blocks if getattr(blk, "text", "")]
+        if text_blocks and all(getattr(blk, "translation", "") for blk in text_blocks):
+            self.main.batch_report_ctrl.resolve_translated_pages([file_path])
 
     def inpaint_and_set(self) -> None:
         if not self.main.image_viewer.hasPhoto():

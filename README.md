@@ -75,7 +75,7 @@ Note: Some of these also have Official English Translations
 
   >Note: GPU acceleration is currently only available when running from source.
 
-* **Browser Extension**: Install the Comic Translate extension for Chromium-based browsers (Chrome, Edge, Brave, etc.) from the [Chrome Web Store](https://chromewebstore.google.com/detail/YOUR_EXTENSION_ID) to read directly on websites.
+* **Browser Extension**: Install the Comic Translate extension for Chromium-based browsers (Chrome, Edge, Brave, etc.) [here](https://www.comic-translate.com/download) to read directly on websites.
 
 ### From Source
 Alternatively, if you'd like to run the source code directly.
@@ -124,7 +124,7 @@ uv run comic.py
 This will launch the GUI
 
 ### Tips
-* If you have a CBR file, you'll need to install Winrar or 7-Zip then add the folder it's installed to (e.g "C:\Program Files\WinRAR" for Windows) to Path. If it's installed but not to Path, you may get the error, 
+* CBR/RAR extraction requires a supported helper such as UnRAR, Unar, or 7-Zip. On Windows, install WinRAR or 7-Zip and add its folder (for example, `C:\Program Files\WinRAR`) to `PATH`. On macOS, the desktop app automatically checks standard Homebrew and MacPorts locations when launched from Finder. If no supported extraction tool is available, you may get the error:
 ```bash
 raise RarCannotExec("Cannot find working tool")
 ```

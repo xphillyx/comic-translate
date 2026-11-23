@@ -16,6 +16,8 @@ from app.ui.list_view_image_loader import ListViewImageLoader
 from app.thread_worker import GenericWorker
 from app.path_materialization import ensure_path_materialized
 from app.controllers.psd_importer import ImportedPsdPage, import_psd_files, prepare_psd_font_catalog
+from app.controllers.psd_support import require_photoshopapi
+from modules.utils.language_utils import to_canonical_language_name, to_ui_language_label
 
 if TYPE_CHECKING:
     from controller import ComicTranslate
@@ -72,8 +74,14 @@ class ImageStateController:
         state = dict(existing_state or self.main.image_states.get(file_path, {}) or {})
         state.update({
             "viewer_state": viewer_state,
-            "source_lang": self.main.s_combo.currentText(),
-            "target_lang": self.main.t_combo.currentText(),
+            "source_lang": to_canonical_language_name(
+                self.main.s_combo.currentText(),
+                self.main.lang_mapping,
+            ),
+            "target_lang": to_canonical_language_name(
+                self.main.t_combo.currentText(),
+                self.main.lang_mapping,
+            ),
             "brush_strokes": brush_strokes,
             "blk_list": blk_list,
             "skip": skip_status,
@@ -342,9 +350,11 @@ class ImageStateController:
                 )
                 return
             try:
+                require_photoshopapi()
                 prepare_psd_font_catalog()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.main.default_error_handler((type(exc), exc, ''))
+                return
             self.main.project_ctrl.clear_recovery_checkpoint()
             self.clear_state()
             if prev_project_file:
@@ -908,32 +918,46 @@ class ImageStateController:
         if removed_any:
             self.main.mark_project_dirty()
 
-    def handle_toggle_skip_images(self, file_names: list[str], skip_status: bool):
+    def handle_toggle_skip_images(self, file_paths: list[str], skip_status: bool):
         """
         Handle toggling skip status for images
         
         Args:
-            file_names: List of file names to update
+            file_paths: List of image paths to update. A uniquely matching
+                filename is accepted for compatibility with legacy callers.
             skip_status: If True, mark as skipped; if False, mark as not skipped
         """
-        file_paths = []
-        for name in file_names:
-            path = next((p for p in self.main.image_files if os.path.basename(p) == name), None)
-            if path:
-                file_paths.append(path)
+        resolved_paths = []
+        seen_paths = set()
+        for identifier in file_paths:
+            if identifier in self.main.image_files:
+                path = identifier
+            else:
+                matches = [
+                    image_path
+                    for image_path in self.main.image_files
+                    if os.path.basename(image_path) == identifier
+                ]
+                # An ambiguous filename must not silently toggle a different
+                # page. The page list now always supplies the full path.
+                path = matches[0] if len(matches) == 1 else None
 
-        if not file_paths:
+            if path and path not in seen_paths:
+                resolved_paths.append(path)
+                seen_paths.add(path)
+
+        if not resolved_paths:
             return
 
         changed = False
-        for path in file_paths:
+        for path in resolved_paths:
             if self.main.image_states.get(path, {}).get('skip', False) != skip_status:
                 changed = True
                 break
         if not changed:
             return
 
-        command = ToggleSkipImagesCommand(self.main, file_paths, skip_status)
+        command = ToggleSkipImagesCommand(self.main, resolved_paths, skip_status)
         stack = self.main.undo_group.activeStack()
         if stack:
             stack.push(command)
@@ -1046,6 +1070,14 @@ class ImageStateController:
 
             if file_path in self.main.image_states:
                 state = self.main.image_states[file_path]
+                state["source_lang"] = to_canonical_language_name(
+                    state.get("source_lang", self.main.s_combo.currentText()),
+                    self.main.lang_mapping,
+                )
+                state["target_lang"] = to_canonical_language_name(
+                    state.get("target_lang", self.main.t_combo.currentText()),
+                    self.main.lang_mapping,
+                )
 
                 # Skip state loading for newly inserted images (which have empty viewer_state)
                 # This prevents loading of incomplete state or invalid transform data.
@@ -1059,8 +1091,12 @@ class ImageStateController:
                     # Block signals to prevent triggering save when loading state
                     self.main.s_combo.blockSignals(True)
                     self.main.t_combo.blockSignals(True)
-                    self.main.s_combo.setCurrentText(state['source_lang'])
-                    self.main.t_combo.setCurrentText(state['target_lang'])
+                    self.main.s_combo.setCurrentText(
+                        to_ui_language_label(state['source_lang'], self.main.reverse_lang_mapping)
+                    )
+                    self.main.t_combo.setCurrentText(
+                        to_ui_language_label(state['target_lang'], self.main.reverse_lang_mapping)
+                    )
                     self.main.s_combo.blockSignals(False)
                     self.main.t_combo.blockSignals(False)
                     viewer.load_brush_strokes(state['brush_strokes'])
@@ -1082,8 +1118,18 @@ class ImageStateController:
                     # Block signals to prevent triggering save when loading state
                     self.main.s_combo.blockSignals(True)
                     self.main.t_combo.blockSignals(True)
-                    self.main.s_combo.setCurrentText(state.get('source_lang', self.main.s_combo.currentText()))
-                    self.main.t_combo.setCurrentText(state.get('target_lang', self.main.t_combo.currentText()))
+                    self.main.s_combo.setCurrentText(
+                        to_ui_language_label(
+                            state.get('source_lang', self.main.s_combo.currentText()),
+                            self.main.reverse_lang_mapping,
+                        )
+                    )
+                    self.main.t_combo.setCurrentText(
+                        to_ui_language_label(
+                            state.get('target_lang', self.main.t_combo.currentText()),
+                            self.main.reverse_lang_mapping,
+                        )
+                    )
                     self.main.s_combo.blockSignals(False)
                     self.main.t_combo.blockSignals(False)
                     viewer.clear_rectangles(page_switch=True)

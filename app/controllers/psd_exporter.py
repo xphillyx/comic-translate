@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 import imkit as imk
 import numpy as np
-import photoshopapi as psapi
+from app.controllers.psd_support import photoshopapi as psapi
 from PySide6 import QtCore, QtGui
 
 from app.ui.canvas.text.text_item_properties import TextItemProperties
@@ -129,6 +129,8 @@ def _write_page_psd(page: PsdPageData, out_path: str) -> None:
 		pos_y=height / 2,
 	)
 	doc.add_layer(base_layer)
+	
+	_set_layer_fills_opaque(doc)
 
 	# Force Photoshop to re-render all text layers on open
 	invalidate = getattr(doc, "invalidate_text_cache", None)
@@ -136,6 +138,13 @@ def _write_page_psd(page: PsdPageData, out_path: str) -> None:
 		invalidate()
 
 	doc.write(out_path, force_overwrite=True)
+
+
+def _set_layer_fills_opaque(doc: Any) -> None:
+	"""Ensure Photoshop composites every exported layer at 100% fill opacity."""
+	for layer in doc.flat_layers:
+		if hasattr(layer, "fill"):
+			layer.fill = 1.0
 
 
 def _build_patch_layer(patch: dict[str, Any], index: int) -> Any | None:

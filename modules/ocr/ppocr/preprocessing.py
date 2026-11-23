@@ -4,6 +4,13 @@ import numpy as np
 import imkit as imk
 
 
+def _to_bgr(img: np.ndarray) -> np.ndarray:
+	"""Convert the app's default RGB numpy images to BGR for PaddleOCR models."""
+	if img.ndim == 3 and img.shape[2] == 3:
+		return img[:, :, ::-1]
+	return img
+
+
 def resize_keep_stride(img: np.ndarray, limit_side_len: int = 960, limit_type: str = "min") -> np.ndarray:
 	"""Resize image so that min or max side meets threshold, snapping to multiple of 32.
 
@@ -35,7 +42,7 @@ def det_preprocess(img: np.ndarray, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5),
 				   limit_side_len: int = 960, limit_type: str = "min") -> np.ndarray:
 	"""Preprocess for DB detector: resize, normalize, CHW, NCHW float32."""
 	resized = resize_keep_stride(img, limit_side_len, limit_type)
-	x = resized.astype(np.float32) / 255.0
+	x = _to_bgr(resized).astype(np.float32) / 255.0
 	x = (x - np.array(mean, dtype=np.float32)) / np.array(std, dtype=np.float32)
 	x = x.transpose(2, 0, 1)
 	x = np.expand_dims(x, 0).astype(np.float32)
@@ -59,7 +66,7 @@ def rec_resize_norm(img: np.ndarray, img_shape=(3, 48, 320), max_wh_ratio: float
 	target_w = int(H * max_wh_ratio)
 	resized_w = min(target_w, int(np.ceil(H * ratio)))
 
-	resized = imk.resize(img, (resized_w, H))
+	resized = _to_bgr(imk.resize(img, (resized_w, H)))
 	x = resized.astype(np.float32) / 255.0
 	x = x.transpose(2, 0, 1)
 	x = (x - 0.5) / 0.5
@@ -69,15 +76,38 @@ def rec_resize_norm(img: np.ndarray, img_shape=(3, 48, 320), max_wh_ratio: float
 	return out
 
 
-def crop_quad(img: np.ndarray, quad: np.ndarray) -> np.ndarray:
-	"""Perspective-crop a quadrilateral region. Auto-rotate tall crops."""
-	pts = quad.astype(np.float32)
-	w = int(max(np.linalg.norm(pts[0]-pts[1]), np.linalg.norm(pts[2]-pts[3])))
-	h = int(max(np.linalg.norm(pts[0]-pts[3]), np.linalg.norm(pts[1]-pts[2])))
+def crop_quad(img: np.ndarray, quad: np.ndarray) -> np.ndarray | None:
+	"""Perspective-crop a quadrilateral region, returning ``None`` when invalid.
+
+	Detector coordinates occasionally collapse to a line on very large images.
+	Such a quadrilateral has no invertible perspective transform, so it must not
+	be sent to ``imkit``.
+	"""
+	pts = np.asarray(quad, dtype=np.float32)
+	if pts.shape != (4, 2) or not np.isfinite(pts).all():
+		return None
+
+	# A repeated point or collinear quad produces a singular homography.
+	if np.unique(pts, axis=0).shape[0] != 4:
+		return None
+	area = abs(0.5 * np.sum(
+		pts[:, 0] * np.roll(pts[:, 1], -1)
+		- pts[:, 1] * np.roll(pts[:, 0], -1)
+	))
+	if area < 1e-3:
+		return None
+
+	w = int(np.ceil(max(np.linalg.norm(pts[0]-pts[1]), np.linalg.norm(pts[2]-pts[3]))))
+	h = int(np.ceil(max(np.linalg.norm(pts[0]-pts[3]), np.linalg.norm(pts[1]-pts[2]))))
+	if w < 1 or h < 1:
+		return None
 	dst = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
-	# imkit expects 4x2 arrays (x,y)
-	M = imk.get_perspective_transform(pts, dst)
-	crop = imk.warp_perspective(img, M, (w, h))
+	try:
+		# imkit expects 4x2 arrays (x,y)
+		M = imk.get_perspective_transform(pts, dst)
+		crop = imk.warp_perspective(img, M, (w, h))
+	except (ValueError, np.linalg.LinAlgError):
+		return None
 	if h > 0 and w > 0 and (h / float(w)) >= 1.5:
 		crop = np.rot90(crop)
 	return crop
